@@ -9,9 +9,10 @@ from typing import Union
 
 import fsspec
 import pathspec
-import prefect
 from fsspec.core import OpenFile
 from fsspec.implementations.local import LocalFileSystem
+
+import prefect
 
 
 def create_default_ignore_file(path: str) -> bool:
@@ -119,3 +120,23 @@ def relative_path_to_current_platform(path_str: str) -> Path:
     """
 
     return Path(PureWindowsPath(path_str).as_posix())
+
+
+def get_open_file_limit() -> int:
+    """Get the maximum number of open files allowed for the current process"""
+
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            return ctypes.cdll.ucrtbase._getmaxstdio()
+        else:
+            import resource
+
+            soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+            return soft_limit
+    except Exception:
+        # Catch all exceptions, as ctypes can raise several errors
+        # depending on what went wrong. Return a safe default if we
+        # can't get the limit from the OS.
+        return 200

@@ -1,9 +1,9 @@
 import datetime
 from typing import Any, Dict, List, Optional, TypeVar, Union
-from typing_extensions import Literal
 from uuid import UUID
 
 from pydantic import Field
+from typing_extensions import Literal
 
 import prefect.client.schemas.objects as objects
 from prefect._internal.schemas.bases import ObjectBaseModel, PrefectBaseModel
@@ -223,3 +223,12 @@ class DeploymentResponse(ObjectBaseModel):
         default=None,
         description="The name of the deployment's work pool.",
     )
+
+
+class MinimalConcurrencyLimitResponse(PrefectBaseModel):
+    class Config:
+        extra = "ignore"
+
+    id: UUID
+    name: str
+    limit: int

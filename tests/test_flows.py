@@ -1,10 +1,10 @@
+import asyncio
 import enum
 import inspect
 import os
-import sys
-import asyncio
-import time
 import signal
+import sys
+import time
 from textwrap import dedent
 from typing import List
 from unittest.mock import MagicMock, call, create_autospec
@@ -12,10 +12,11 @@ from unittest.mock import MagicMock, call, create_autospec
 import anyio
 import pydantic
 import pytest
+import regex as re
 
-from prefect import flow, get_run_logger, tags, task
-from prefect import runtime
 import prefect
+import prefect.exceptions
+from prefect import flow, get_run_logger, runtime, tags, task
 from prefect.client.orchestration import PrefectClient, get_client
 from prefect.context import PrefectObjectRegistry
 from prefect.exceptions import (
@@ -30,8 +31,15 @@ from prefect.runtime import flow_run as flow_run_ctx
 from prefect.server.schemas.core import TaskRunResult
 from prefect.server.schemas.filters import FlowFilter, FlowRunFilter
 from prefect.server.schemas.sorting import FlowRunSort
-from prefect.settings import temporary_settings, PREFECT_FLOW_DEFAULT_RETRIES
-from prefect.states import Cancelled, State, StateType, raise_state_exception
+from prefect.settings import PREFECT_FLOW_DEFAULT_RETRIES, temporary_settings
+from prefect.states import (
+    Cancelled,
+    Paused,
+    PausedRun,
+    State,
+    StateType,
+    raise_state_exception,
+)
 from prefect.task_runners import ConcurrentTaskRunner, SequentialTaskRunner
 from prefect.testing.utilities import (
     exceptions_equal,
@@ -42,7 +50,6 @@ from prefect.utilities.annotations import allow_failure, quote
 from prefect.utilities.callables import parameter_schema
 from prefect.utilities.collections import flatdict_to_dict
 from prefect.utilities.hashing import file_hash
-import prefect.exceptions
 
 
 @pytest.fixture
@@ -241,10 +248,10 @@ class TestFlowWithOptions:
             result_serializer="pickle",
             result_storage=LocalFileSystem(basepath="foo"),
             cache_result_in_memory=False,
-            on_completion=[],
-            on_failure=[],
-            on_cancellation=[],
-            on_crashed=[],
+            on_completion=None,
+            on_failure=None,
+            on_cancellation=None,
+            on_crashed=None,
         )
         def initial_flow():
             pass
@@ -368,6 +375,54 @@ class TestFlowWithOptions:
         with_options_params.remove("self")
 
         assert flow_params == with_options_params
+
+    def get_flow_run_name():
+        name = "test"
+        date = "todays_date"
+        return f"{name}-{date}"
+
+    @pytest.mark.parametrize(
+        "name, match",
+        [
+            (1, "Expected string for flow parameter 'name'; got int instead."),
+            (
+                get_flow_run_name,
+                (
+                    "Expected string for flow parameter 'name'; got function instead."
+                    " Perhaps you meant to call it?"
+                ),
+            ),
+        ],
+    )
+    def test_flow_name_non_string_raises(self, name, match):
+        with pytest.raises(TypeError, match=match):
+            Flow(
+                name=name,
+                fn=lambda **kwargs: 42,
+                version="A",
+                description="B",
+                flow_run_name="hi",
+            )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "test",
+            (get_flow_run_name()),
+        ],
+    )
+    def test_flow_name_string_succeeds(
+        self,
+        name,
+    ):
+        f = Flow(
+            name=name,
+            fn=lambda **kwargs: 42,
+            version="A",
+            description="B",
+            flow_run_name="hi",
+        )
+        assert f.name == name
 
 
 class TestFlowCall:
@@ -629,6 +684,17 @@ class TestFlowCall:
             state = foo(1, 2)
             assert state is None
 
+    def test_flow_can_end_in_paused_state(self):
+        @flow
+        def my_flow():
+            return Paused()
+
+        with pytest.raises(PausedRun, match="result is not available"):
+            my_flow()
+
+        flow_state = my_flow(return_state=True)
+        assert flow_state.is_paused()
+
     def test_flow_can_end_in_cancelled_state(self):
         @flow
         def my_flow():
@@ -785,6 +851,7 @@ class TestSubflowCalls:
 
         assert parent(1, 2) == 6
 
+    @pytest.mark.flaky(max_runs=2)
     async def test_concurrent_async_subflow(self):
         @task
         async def test_task():
@@ -2283,6 +2350,61 @@ def create_async_hook(mock_obj):
 
 
 class TestFlowHooksOnCompletion:
+    def test_noniterable_hook_raises(self):
+        def completion_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected iterable for 'on_completion'; got function instead. Please"
+                " provide a list of hooks to 'on_completion':\n\n"
+                "@flow(on_completion=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_completion=completion_hook)
+            def flow1():
+                pass
+
+    def test_empty_hook_list_raises(self):
+        with pytest.raises(ValueError, match="Empty list passed for 'on_completion'"):
+
+            @flow(on_completion=[])
+            def flow2():
+                pass
+
+    def test_noncallable_hook_raises(self):
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_completion'; got str instead. Please provide"
+                " a list of hooks to 'on_completion':\n\n"
+                "@flow(on_completion=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_completion=["test"])
+            def flow1():
+                pass
+
+    def test_callable_noncallable_hook_raises(self):
+        def completion_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_completion'; got str instead. Please provide"
+                " a list of hooks to 'on_completion':\n\n"
+                "@flow(on_completion=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_completion=[completion_hook, "test"])
+            def flow2():
+                pass
+
     def test_on_completion_hooks_run_on_completed(self):
         my_mock = MagicMock()
 
@@ -2361,6 +2483,61 @@ class TestFlowHooksOnCompletion:
 
 
 class TestFlowHooksOnFailure:
+    def test_noniterable_hook_raises(self):
+        def failure_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected iterable for 'on_failure'; got function instead. Please"
+                " provide a list of hooks to 'on_failure':\n\n"
+                "@flow(on_failure=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_failure=failure_hook)
+            def flow1():
+                pass
+
+    def test_empty_hook_list_raises(self):
+        with pytest.raises(ValueError, match="Empty list passed for 'on_failure'"):
+
+            @flow(on_failure=[])
+            def flow2():
+                pass
+
+    def test_noncallable_hook_raises(self):
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_failure'; got str instead. Please provide a"
+                " list of hooks to 'on_failure':\n\n"
+                "@flow(on_failure=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_failure=["test"])
+            def flow1():
+                pass
+
+    def test_callable_noncallable_hook_raises(self):
+        def failure_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_failure'; got str instead. Please provide a"
+                " list of hooks to 'on_failure':\n\n"
+                "@flow(on_failure=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_failure=[failure_hook, "test"])
+            def flow2():
+                pass
+
     def test_on_failure_hooks_run_on_failure(self):
         my_mock = MagicMock()
 
@@ -2439,6 +2616,61 @@ class TestFlowHooksOnFailure:
 
 
 class TestFlowHooksOnCancellation:
+    def test_noniterable_hook_raises(self):
+        def cancellation_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected iterable for 'on_cancellation'; got function instead. Please"
+                " provide a list of hooks to 'on_cancellation':\n\n"
+                "@flow(on_cancellation=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_cancellation=cancellation_hook)
+            def flow1():
+                pass
+
+    def test_empty_hook_list_raises(self):
+        with pytest.raises(ValueError, match="Empty list passed for 'on_cancellation'"):
+
+            @flow(on_cancellation=[])
+            def flow2():
+                pass
+
+    def test_noncallable_hook_raises(self):
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_cancellation'; got str instead. Please"
+                " provide a list of hooks to 'on_cancellation':\n\n"
+                "@flow(on_cancellation=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_cancellation=["test"])
+            def flow1():
+                pass
+
+    def test_callable_noncallable_hook_raises(self):
+        def cancellation_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_cancellation'; got str instead. Please"
+                " provide a list of hooks to 'on_cancellation':\n\n"
+                "@flow(on_cancellation=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_cancellation=[cancellation_hook, "test"])
+            def flow2():
+                pass
+
     def test_on_cancellation_hooks_run_on_cancelled_state(self):
         my_mock = MagicMock()
 
@@ -2592,6 +2824,61 @@ class TestFlowHooksOnCancellation:
 
 
 class TestFlowHooksOnCrashed:
+    def test_noniterable_hook_raises(self):
+        def crashed_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected iterable for 'on_crashed'; got function instead. Please"
+                " provide a list of hooks to 'on_crashed':\n\n"
+                "@flow(on_crashed=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_crashed=crashed_hook)
+            def flow1():
+                pass
+
+    def test_empty_hook_list_raises(self):
+        with pytest.raises(ValueError, match="Empty list passed for 'on_crashed'"):
+
+            @flow(on_crashed=[])
+            def flow2():
+                pass
+
+    def test_noncallable_hook_raises(self):
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_crashed'; got str instead. Please provide a"
+                " list of hooks to 'on_crashed':\n\n"
+                "@flow(on_crashed=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_crashed=["test"])
+            def flow1():
+                pass
+
+    def test_callable_noncallable_hook_raises(self):
+        def crashed_hook():
+            pass
+
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "Expected callables in 'on_crashed'; got str instead. Please provide a"
+                " list of hooks to 'on_crashed':\n\n"
+                "@flow(on_crashed=[hook1, hook2])\ndef my_flow():\n\tpass"
+            ),
+        ):
+
+            @flow(on_crashed=[crashed_hook, "test"])
+            def flow2():
+                pass
+
     def test_on_crashed_hooks_run_on_crashed_state(self):
         my_mock = MagicMock()
 

@@ -24,46 +24,47 @@ import prefect.context
 import prefect.exceptions
 from prefect import flow, tags
 from prefect.client.orchestration import PrefectClient, ServerType, get_client
+from prefect.client.schemas.actions import (
+    ArtifactCreate,
+    LogCreate,
+    VariableCreate,
+    WorkPoolCreate,
+)
+from prefect.client.schemas.filters import (
+    ArtifactFilter,
+    ArtifactFilterKey,
+    FlowFilter,
+    FlowRunFilter,
+    FlowRunNotificationPolicyFilter,
+    LogFilter,
+    LogFilterFlowRunId,
+)
+from prefect.client.schemas.objects import (
+    Flow,
+    FlowRunNotificationPolicy,
+    FlowRunPolicy,
+    StateType,
+    TaskRun,
+    Variable,
+    WorkQueue,
+)
 from prefect.client.schemas.responses import (
-    OrchestrationResult,
     DeploymentResponse,
+    OrchestrationResult,
     SetStateStatus,
 )
+from prefect.client.schemas.schedules import IntervalSchedule
 from prefect.client.utilities import inject_client
 from prefect.deprecated.data_documents import DataDocument
 from prefect.events.schemas import Automation, Posture, Trigger
 from prefect.server.api.server import SERVER_API_VERSION, create_app
-from prefect.client.schemas.actions import (
-    ArtifactCreate,
-    LogCreate,
-    WorkPoolCreate,
-    VariableCreate,
-)
-from prefect.client.schemas.objects import (
-    WorkQueue,
-    FlowRunNotificationPolicy,
-    Flow,
-    FlowRunPolicy,
-    TaskRun,
-    Variable,
-)
-from prefect.client.schemas.filters import (
-    FlowRunNotificationPolicyFilter,
-    FlowFilter,
-    FlowRunFilter,
-    ArtifactFilter,
-    ArtifactFilterKey,
-    LogFilter,
-    LogFilterFlowRunId,
-)
-from prefect.client.schemas.schedules import IntervalSchedule
-from prefect.client.schemas.objects import StateType
 from prefect.settings import (
     PREFECT_API_DATABASE_MIGRATE_ON_START,
     PREFECT_API_KEY,
     PREFECT_API_TLS_INSECURE_SKIP_VERIFY,
     PREFECT_API_URL,
     PREFECT_CLOUD_API_URL,
+    PREFECT_UNIT_TEST_MODE,
     temporary_settings,
 )
 from prefect.states import Completed, Pending, Running, Scheduled, State
@@ -399,6 +400,7 @@ class TestClientContextManager:
         assert startup.call_count == shutdown.call_count
         assert startup.call_count > 0
 
+    @pytest.mark.flaky(max_runs=3)
     async def test_client_context_lifespan_is_robust_to_high_async_concurrency(self):
         startup, shutdown = MagicMock(), MagicMock()
         app = FastAPI(lifespan=make_lifespan(startup, shutdown))
@@ -1874,3 +1876,24 @@ async def test_server_error_does_not_raise_on_client():
     ) as client:
         with pytest.raises(prefect.exceptions.HTTPStatusError, match="500"):
             await client._client.get("/raise_error")
+
+
+async def test_prefect_client_follow_redirects():
+    app = create_app(ephemeral=True)
+
+    httpx_settings = {"follow_redirects": True}
+    async with PrefectClient(api=app, httpx_settings=httpx_settings) as client:
+        assert client._client.follow_redirects is True
+
+    httpx_settings = {"follow_redirects": False}
+    async with PrefectClient(api=app, httpx_settings=httpx_settings) as client:
+        assert client._client.follow_redirects is False
+
+    # follow redirects by default
+    with temporary_settings({PREFECT_UNIT_TEST_MODE: False}):
+        async with PrefectClient(api=app) as client:
+            assert client._client.follow_redirects is True
+
+    # do not follow redirects by default during unit tests
+    async with PrefectClient(api=app) as client:
+        assert client._client.follow_redirects is False

@@ -5,11 +5,8 @@ tags:
     - Prefect server
 hide:
     - toc
-title: Prefect Server REST API reference
+title: Prefect server REST API reference
 ---
-
-## Prefect Server REST API
-The REST API documentation for a locally hosted open-source Prefect server is available below.
 
 <hr>
 

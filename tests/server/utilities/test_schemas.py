@@ -11,17 +11,19 @@ import pytest
 
 import prefect._internal.schemas.bases
 import prefect.server.utilities.schemas
+from prefect._internal.schemas.bases import PrefectBaseModel
 from prefect.server.utilities.schemas import (
     DateTimeTZ,
     FieldFrom,
     IDBaseModel,
     ORMBaseModel,
-    PrefectBaseModel as ServerPrefectBaseModel,
     copy_model_fields,
     pydantic_subclass,
 )
+from prefect.server.utilities.schemas import (
+    PrefectBaseModel as ServerPrefectBaseModel,
+)
 from prefect.testing.utilities import assert_does_not_warn
-from prefect._internal.schemas.bases import PrefectBaseModel
 
 
 @contextmanager
@@ -234,12 +236,12 @@ class TestJsonCompatibleDict:
         return Parent(x=uuid4(), y=Child(z=uuid4()))
 
     def test_json_compatible_and_nested_errors(self):
-        model = self.Model(x=uuid4(), y=pendulum.now())
+        model = self.Model(x=uuid4(), y=pendulum.now("UTC"))
         with pytest.raises(ValueError, match="(only be applied to the entire object)"):
             model.dict(json_compatible=True, shallow=True)
 
     def test_json_compatible(self):
-        model = self.Model(x=uuid4(), y=pendulum.now())
+        model = self.Model(x=uuid4(), y=pendulum.now("UTC"))
         d1 = model.dict()
         d2 = model.dict(json_compatible=True)
 
@@ -288,9 +290,9 @@ class TestEqualityExcludedFields:
         class X(ORMBaseModel):
             x: int
 
-        x1 = X(id=uuid4(), created=pendulum.now(), x=1)
-        x2 = X(id=uuid4(), created=pendulum.now().add(hours=1), x=1)
-        x3 = X(id=uuid4(), created=pendulum.now().subtract(hours=1), x=2)
+        x1 = X(id=uuid4(), created=pendulum.now("UTC"), x=1)
+        x2 = X(id=uuid4(), created=pendulum.now("UTC").add(hours=1), x=1)
+        x3 = X(id=uuid4(), created=pendulum.now("UTC").subtract(hours=1), x=2)
         assert x1 == x2
         assert x1.created != x2.created
         assert x1 != x3

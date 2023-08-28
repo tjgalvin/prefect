@@ -1,12 +1,13 @@
 import datetime
 from uuid import uuid4
 
-import pendulum
 import anyio
+import pendulum
 import pytest
 
 from prefect.server import models, schemas
 from prefect.server.exceptions import ObjectNotFoundError
+from prefect.server.orchestration.core_policy import PreventPendingTransitions
 from prefect.server.orchestration.dependencies import (
     provide_flow_orchestration_parameters,
     provide_flow_policy,
@@ -19,8 +20,7 @@ from prefect.server.orchestration.rules import (
     BaseOrchestrationRule,
     OrchestrationContext,
 )
-from prefect.server.orchestration.core_policy import PreventPendingTransitions
-from prefect.server.schemas.states import Running, Scheduled, StateType, Pending
+from prefect.server.schemas.states import Pending, Running, Scheduled, StateType
 
 
 class TestSetFlowRunState:
@@ -198,7 +198,7 @@ class TestCreateFlowRunState:
         frs = await models.flow_runs.set_flow_run_state(
             session=session,
             flow_run_id=flow_run.id,
-            state=Scheduled(scheduled_time=pendulum.now().add(months=1)),
+            state=Scheduled(scheduled_time=pendulum.now("UTC").add(months=1)),
             flow_policy=await provide_flow_policy(),
         )
 
@@ -225,7 +225,7 @@ class TestCreateFlowRunState:
             frs = await models.flow_runs.set_flow_run_state(
                 session=session,
                 flow_run_id=flow_run.id,
-                state=Scheduled(scheduled_time=pendulum.now().add(months=1)),
+                state=Scheduled(scheduled_time=pendulum.now("UTC").add(months=1)),
                 flow_policy=await provide_flow_policy(),
             )
 
@@ -261,7 +261,7 @@ class TestCreateFlowRunState:
                 frs = await models.flow_runs.set_flow_run_state(
                     session=session,
                     flow_run_id=flow_run.id,
-                    state=Scheduled(scheduled_time=pendulum.now().add(months=1)),
+                    state=Scheduled(scheduled_time=pendulum.now("UTC").add(months=1)),
                     flow_policy=await provide_flow_policy(),
                     orchestration_parameters=await provide_flow_orchestration_parameters(),
                 )

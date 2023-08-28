@@ -25,6 +25,7 @@ from prefect.client.schemas.objects import DEFAULT_AGENT_WORK_POOL_NAME, FlowRun
 from prefect.client.schemas.schedules import SCHEDULE_TYPES
 from prefect.client.utilities import inject_client
 from prefect.context import FlowRunContext, PrefectObjectRegistry
+from prefect.deployments.steps.core import run_steps
 from prefect.events.schemas import DeploymentTrigger
 from prefect.exceptions import (
     BlockMissingCapabilities,
@@ -42,8 +43,6 @@ from prefect.utilities.callables import ParameterSchema, parameter_schema
 from prefect.utilities.filesystem import relative_path_to_current_platform, tmpchdir
 from prefect.utilities.slugify import slugify
 
-from prefect.deployments.steps.core import run_steps
-
 
 @sync_compatible
 @inject_client
@@ -57,6 +56,7 @@ async def run_deployment(
     poll_interval: Optional[float] = 5,
     tags: Optional[Iterable[str]] = None,
     idempotency_key: Optional[str] = None,
+    work_queue_name: Optional[str] = None,
 ):
     """
     Create a flow run for a deployment and return it after completion or a timeout.
@@ -68,7 +68,7 @@ async def run_deployment(
 
     Args:
         name: The deployment id or deployment name in the form:
-            '<flow-name>/<deployment-name>'
+            `<slugified-flow-name>/<slugified-deployment-name>`
         parameters: Parameter overrides for this flow run. Merged with the deployment
             defaults.
         scheduled_time: The time to schedule the flow run for, defaults to scheduling
@@ -83,6 +83,8 @@ async def run_deployment(
             only for organizational purposes.
         idempotency_key: A unique value to recognize retries of the same run, and
             prevent creating multiple flow runs.
+        work_queue_name: The name of a work queue to use for this run. Defaults to
+            the default work queue for the deployment.
     """
     if timeout is not None and timeout < 0:
         raise ValueError("`timeout` cannot be negative")
@@ -153,6 +155,7 @@ async def run_deployment(
         tags=tags,
         idempotency_key=idempotency_key,
         parent_task_run_id=parent_task_run_id,
+        work_queue_name=work_queue_name,
     )
 
     flow_run_id = flow_run.id
@@ -262,6 +265,7 @@ class Deployment(BaseModel):
         schedule: A schedule to run this deployment on, once registered
         is_schedule_active: Whether or not the schedule is active
         work_queue_name: The work queue that will handle this deployment's runs
+        work_pool_name: The work pool for the deployment
         flow_name: The name of the flow this deployment encapsulates
         parameters: A dictionary of parameter values to pass to runs created from this
             deployment

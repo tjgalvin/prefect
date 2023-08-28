@@ -8,7 +8,6 @@ import anyio.abc
 import pendulum
 from pydantic import BaseModel, Field, PrivateAttr, validator
 
-
 import prefect
 from prefect._internal.compatibility.experimental import experimental
 from prefect.client.orchestration import PrefectClient, get_client
@@ -37,12 +36,16 @@ from prefect.exceptions import (
     ObjectNotFound,
 )
 from prefect.logging.loggers import PrefectLogAdapter, flow_run_logger, get_logger
+from prefect.plugins import load_prefect_collections
 from prefect.settings import PREFECT_WORKER_PREFETCH_SECONDS, get_current_settings
 from prefect.states import Crashed, Pending, exception_to_failed_state
 from prefect.utilities.dispatch import get_registry_for_type, register_base_type
 from prefect.utilities.slugify import slugify
-from prefect.utilities.templating import apply_values, resolve_block_document_references
-from prefect.plugins import load_prefect_collections
+from prefect.utilities.templating import (
+    apply_values,
+    resolve_block_document_references,
+    resolve_variables,
+)
 
 if TYPE_CHECKING:
     from prefect.client.schemas.objects import Flow, FlowRun
@@ -117,11 +120,14 @@ class BaseJobConfiguration(BaseModel):
             variables_schema.get("properties", {})
         )
         variables.update(values)
-        variables = await resolve_block_document_references(
-            template=variables, client=client
-        )
 
         populated_configuration = apply_values(template=job_config, values=variables)
+        populated_configuration = await resolve_block_document_references(
+            template=populated_configuration, client=client
+        )
+        populated_configuration = await resolve_variables(
+            template=populated_configuration, client=client
+        )
         return cls(**populated_configuration)
 
     @classmethod
@@ -645,9 +651,9 @@ class BaseWorker(abc.ABC):
                 work_pool = await self._client.create_work_pool(
                     work_pool=WorkPoolCreate(name=self._work_pool_name, type=self.type)
                 )
-                self._logger.info(f"Worker pool {self._work_pool_name!r} created.")
+                self._logger.info(f"Work pool {self._work_pool_name!r} created.")
             else:
-                self._logger.warning(f"Worker pool {self._work_pool_name!r} not found!")
+                self._logger.warning(f"Work pool {self._work_pool_name!r} not found!")
                 return
 
         # if the remote config type changes (or if it's being loaded for the

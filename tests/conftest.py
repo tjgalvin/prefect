@@ -19,8 +19,8 @@ WARNING: Prefect settings cannot be modified in async fixtures.
 import asyncio
 import logging
 import pathlib
-import sys
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Generator, Optional
@@ -37,7 +37,6 @@ pytest.register_assert_rewrite("prefect.testing.utilities")
 import prefect
 import prefect.settings
 from prefect.logging.configuration import setup_logging
-
 from prefect.settings import (
     PREFECT_API_BLOCKS_REGISTER_ON_START,
     PREFECT_API_DATABASE_CONNECTION_URL,
@@ -60,6 +59,7 @@ from prefect.settings import (
     PREFECT_MEMOIZE_BLOCK_AUTO_REGISTRATION,
     PREFECT_PROFILES_PATH,
     PREFECT_SERVER_ANALYTICS_ENABLED,
+    PREFECT_UNIT_TEST_MODE,
 )
 from prefect.utilities.dispatch import get_registry_for_type
 
@@ -309,6 +309,8 @@ def pytest_sessionstart(session):
             PREFECT_MEMOIZE_BLOCK_AUTO_REGISTRATION: False,
             # Disable auto-registration of block types as they can conflict
             PREFECT_API_BLOCKS_REGISTER_ON_START: False,
+            # Code is being executed in a unit test context
+            PREFECT_UNIT_TEST_MODE: True,
         },
         source=__file__,
     )

@@ -16,7 +16,6 @@ search:
 # Contribute
 
 We welcome contributors! You can help contribute blocks and integrations by following these steps.
-We welcome contributors! You can help contribute blocks and integrations by following these steps.
 
 ## Contributing Blocks
 
@@ -61,11 +60,11 @@ class Secret(Block):
         return self.value.get_secret_value()
 ```
 
-To view in the Prefect Cloud or Prefect server UI, [register the block](https://docs.prefect.io/concepts/blocks/#registering-blocks-for-use-in-the-prefect-ui).
+To view in Prefect Cloud or the Prefect server UI, [register the block](https://docs.prefect.io/concepts/blocks/#registering-blocks-for-use-in-the-prefect-ui).
 
 ## Contributing Integrations
 
-Anyone can create and share a Prefect Integration and we encourage anyone interested in creating a integration to do so!
+Anyone can create and share a Prefect Integration and we encourage anyone interested in creating an integration to do so!
 
 ### Generate a project
 

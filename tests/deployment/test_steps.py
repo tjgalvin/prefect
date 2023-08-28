@@ -1,17 +1,17 @@
-from pathlib import Path
 import sys
 import warnings
-from prefect._internal.compatibility.deprecated import PrefectDeprecationWarning
-from prefect.testing.utilities import AsyncMock, MagicMock
+from pathlib import Path
 from unittest.mock import ANY
+
 import pytest
 
+from prefect._internal.compatibility.deprecated import PrefectDeprecationWarning
 from prefect.blocks.system import Secret
 from prefect.client.orchestration import PrefectClient
 from prefect.deployments.steps import run_step
-
-from prefect.deployments.steps.utility import run_shell_script
 from prefect.deployments.steps.core import StepExecutionError, run_steps
+from prefect.deployments.steps.utility import run_shell_script
+from prefect.testing.utilities import AsyncMock, MagicMock
 
 
 @pytest.fixture
@@ -22,6 +22,13 @@ async def variables(prefect_client: PrefectClient):
     await prefect_client._client.post(
         "/variables/", json={"name": "test_variable_2", "value": "test_value_2"}
     )
+
+
+@pytest.fixture(scope="session")
+def set_dummy_env_var():
+    import os
+
+    os.environ["DUMMY_ENV_VAR"] = "dummy"
 
 
 class TestRunStep:
@@ -63,6 +70,23 @@ class TestRunStep:
         assert isinstance(output, dict)
         assert output == {
             "stdout": "I am a secret!",
+            "stderr": "",
+        }
+
+    async def test_run_step_resolves_environment_variables_before_running(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("TEST_ENV_VAR", "test_value")
+        output = await run_step(
+            {
+                "prefect.deployments.steps.run_shell_script": {
+                    "script": 'echo "{{ $TEST_ENV_VAR }}"',
+                }
+            }
+        )
+        assert isinstance(output, dict)
+        assert output == {
+            "stdout": "test_value",
             "stderr": "",
         }
 
@@ -221,6 +245,18 @@ class TestRunSteps:
         mock_print.assert_any_call("this is a warning")
 
 
+class MockGitHubCredentials:
+    def __init__(self, token: str):
+        self.token = token
+        self.data = {"value": {"token": self.token}}
+
+    async def save(self, name: str):
+        pass
+
+    async def load(self, name: str):
+        return MockGitHubCredentials("mock-token")
+
+
 class TestGitCloneStep:
     async def test_git_clone(self, monkeypatch):
         subprocess_mock = MagicMock()
@@ -337,6 +373,114 @@ class TestGitCloneStep:
             )
         assert "super-secret-42".upper() not in str(exc.getrepr())
 
+    @pytest.mark.asyncio
+    async def test_git_clone_with_valid_credentials_block_succeeds(self, monkeypatch):
+        mock_subprocess = MagicMock()
+        monkeypatch.setattr(
+            "prefect.deployments.steps.pull.subprocess",
+            mock_subprocess,
+        )
+        blocks = {
+            "github-credentials": {
+                "my-github-creds-block": MockGitHubCredentials("mock-token")
+            }
+        }
+
+        async def mock_read_block_document(self, name: str, block_type_slug: str):
+            return blocks[block_type_slug][name]
+
+        monkeypatch.setattr(
+            "prefect.client.orchestration.PrefectClient.read_block_document_by_name",
+            mock_read_block_document,
+        )
+
+        await MockGitHubCredentials("mock-token").save("my-github-creds-block")
+
+        output = await run_step(
+            {
+                "prefect.deployments.steps.git_clone": {
+                    "repository": "https://github.com/org/repo.git",
+                    "credentials": (
+                        "{{ prefect.blocks.github-credentials.my-github-creds-block }}"
+                    ),
+                }
+            }
+        )
+
+        assert output["directory"] == "repo"
+        mock_subprocess.check_call.assert_called_once_with(
+            [
+                "git",
+                "clone",
+                "https://mock-token@github.com/org/repo.git",
+                "--depth",
+                "1",
+            ],
+            shell=False,
+            stderr=ANY,
+            stdout=ANY,
+        )
+
+    @pytest.mark.asyncio
+    async def test_git_clone_with_invalid_credentials_block_raises(self, monkeypatch):
+        blocks = {
+            "github-credentials": {
+                "my-github-creds-block": MockGitHubCredentials("mock-token")
+            }
+        }
+
+        async def mock_read_block_document(self, name: str, block_type_slug: str):
+            return blocks[block_type_slug][name]
+
+        monkeypatch.setattr(
+            "prefect.client.orchestration.PrefectClient.read_block_document_by_name",
+            mock_read_block_document,
+        )
+
+        with pytest.raises(KeyError, match="invalid-block"):
+            await run_step(
+                {
+                    "prefect.deployments.steps.git_clone": {
+                        "repository": "https://github.com/org/repo.git",
+                        "credentials": (
+                            "{{ prefect.blocks.github-credentials.invalid-block }}"
+                        ),
+                    }
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_git_clone_with_token_and_credentials_raises(self, monkeypatch):
+        blocks = {
+            "github-credentials": {
+                "my-github-creds-block": MockGitHubCredentials("mock-token")
+            }
+        }
+
+        async def mock_read_block_document(self, name: str, block_type_slug: str):
+            return blocks[block_type_slug][name]
+
+        monkeypatch.setattr(
+            "prefect.client.orchestration.PrefectClient.read_block_document_by_name",
+            mock_read_block_document,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="Please provide either an access token or credentials but not both",
+        ):
+            await run_step(
+                {
+                    "prefect.deployments.steps.git_clone": {
+                        "repository": "https://github.com/org/repo.git",
+                        "access_token": "my-token",
+                        "credentials": (
+                            "{{ prefect.blocks.github-credentials.my-github-creds-block }}"
+                        ),
+                    }
+                }
+            )
+
 
 class TestRunShellScript:
     async def test_run_shell_script_single_command(self, capsys):
@@ -377,18 +521,50 @@ class TestRunShellScript:
         assert out == ""
         assert err.strip() == "Error Message"
 
-    async def test_run_shell_script_with_env(self, capsys):
-        script = "bash -c 'echo $TEST_ENV_VAR'"
+    @pytest.mark.parametrize(
+        "script,expected",
+        [
+            ("bash -c 'echo $TEST_ENV_VAR'", "Test Value"),
+            ("echo $TEST_ENV_VAR", "$TEST_ENV_VAR"),
+        ],
+    )
+    async def test_run_shell_script_with_env(self, script, expected, capsys):
         result = await run_shell_script(
             script, env={"TEST_ENV_VAR": "Test Value"}, stream_output=True
         )
-        assert result["stdout"] == "Test Value"
+        assert result["stdout"] == expected
         assert result["stderr"] == ""
 
         # Validate the output was streamed to the console
         out, err = capsys.readouterr()
-        assert out.strip() == "Test Value"
+        assert out.strip() == expected
         assert err == ""
+
+    @pytest.mark.parametrize(
+        "script",
+        [
+            "echo $DUMMY_ENV_VAR",
+            "bash -c 'echo $DUMMY_ENV_VAR'",
+        ],
+    )
+    async def test_run_shell_script_expand_env(self, script, capsys, set_dummy_env_var):
+        result = await run_shell_script(
+            script,
+            expand_env_vars=True,
+            stream_output=True,
+        )
+
+        assert result["stdout"] == "dummy"
+        assert result["stderr"] == ""
+
+    async def test_run_shell_script_no_expand_env(self, capsys, set_dummy_env_var):
+        result = await run_shell_script(
+            "echo $DUMMY_ENV_VAR",
+            stream_output=True,
+        )
+
+        assert result["stdout"] == "$DUMMY_ENV_VAR"
+        assert result["stderr"] == ""
 
     async def test_run_shell_script_no_output(self, capsys):
         result = await run_shell_script("echo Hello World", stream_output=False)

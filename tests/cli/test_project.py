@@ -1,15 +1,15 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
 import pytest
 import readchar
-from typer import Exit
 import yaml
-from prefect.server import models
-from prefect.client import schemas
+from typer import Exit
 
+from prefect.client import schemas
+from prefect.server import models
 from prefect.testing.cli import invoke_and_assert
 
 
@@ -231,17 +231,6 @@ class TestProjectInit:
                 "init --name test_project",
                 temp_dir=str(tempdir),
                 user_input=(readchar.key.DOWN * 10) + readchar.key.ENTER,
-            )
-            assert result.exit_code == 0
-            assert any(Path(tempdir).rglob("prefect.yaml"))
-
-    @pytest.mark.usefixtures("interactive_console")
-    def test_project_init_use_first_recipe(self):
-        with TemporaryDirectory() as tempdir:
-            result = invoke_and_assert(
-                "init --name test_project",
-                temp_dir=str(tempdir),
-                user_input=readchar.key.DOWN + readchar.key.ENTER,
             )
             assert result.exit_code == 0
             assert any(Path(tempdir).rglob("prefect.yaml"))
